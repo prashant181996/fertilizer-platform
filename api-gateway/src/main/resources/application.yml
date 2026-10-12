@@ -1,0 +1,46 @@
+server:
+  port: ${SERVER_PORT:8080}
+spring:
+  application:
+    name: api-gateway
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+  cloud:
+    gateway:
+      routes:
+        - id: product-service
+          uri: ${PRODUCT_URL:http://localhost:8081}
+          predicates: [Path=/api/products/**]
+          filters:
+            - name: RequestRateLimiter
+              args:
+                key-resolver: "#{@clientKeyResolver}"
+                redis-rate-limiter.replenishRate: 100
+                redis-rate-limiter.burstCapacity: 200
+                redis-rate-limiter.requestedTokens: 1
+        - id: inventory-service
+          uri: ${INVENTORY_URL:http://localhost:8082}
+          predicates: [Path=/api/inventory/**]
+        - id: order-service
+          uri: ${ORDER_URL:http://localhost:8083}
+          predicates: [Path=/api/orders/**]
+          filters:
+            - name: RequestRateLimiter
+              args:
+                key-resolver: "#{@clientKeyResolver}"
+                redis-rate-limiter.replenishRate: 100
+                redis-rate-limiter.burstCapacity: 200
+                redis-rate-limiter.requestedTokens: 1
+        - id: payment-service
+          uri: ${PAYMENT_URL:http://localhost:8084}
+          predicates: [Path=/api/payments/**]
+        - id: delivery-service
+          uri: ${DELIVERY_URL:http://localhost:8085}
+          predicates: [Path=/api/deliveries/**]
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
