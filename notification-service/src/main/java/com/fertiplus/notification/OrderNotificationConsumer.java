@@ -1,1 +1,16 @@
-package com.fertiplus.notification;import org.slf4j.Logger;import org.slf4j.LoggerFactory;import org.springframework.kafka.annotation.KafkaListener;import org.springframework.stereotype.Component;@Component public class OrderNotificationConsumer{private static final Logger log=LoggerFactory.getLogger(OrderNotificationConsumer.class);@KafkaListener(topics="orders.created",groupId="notification-service")public void onOrderCreated(String event){log.info("[DEMO NOTIFICATION] order event received: {}",event);}}
+package com.fertiplus.notification;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.stereotype.Component;
+
+@Component
+public class OrderNotificationConsumer {
+    private static final Logger log = LoggerFactory.getLogger(OrderNotificationConsumer.class);
+
+    @KafkaListener(topics = "orders.created", groupId = "notification-service")
+    public void onOrderCreated(String event) {
+        log.info("[DEMO NOTIFICATION] order event received: {}", event);
+    }
+}
