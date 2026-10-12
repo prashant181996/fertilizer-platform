@@ -56,11 +56,3 @@ k6 run -e BASE_URL=http://localhost:8080 -e RATE=100 -e DURATION=1m load-test/k6
 
 A 10,000 request/sec test should be run against a production-like multi-node environment, with a separate load generator, sufficient distinct authenticated clients, pre-provisioned stock, and defined latency/error SLOs. The included local Compose stack is for functional development, not a 10k TPS proof.
 
-## Production gaps
-
-- Replace synchronous orchestration with durable asynchronous acceptance + transactional outbox + Kafka consumers + Saga state machine and compensation.
-- Persist payment and delivery state; the included implementations are in-memory demos.
-- Add service-specific DB users/credentials, Flyway migrations, backup/restore, TLS, secrets management, OAuth2/JWT, authorization, audit logs and observability.
-- Add idempotency to reservation/release/payment operations, including durable unique keys.
-- Use a multi-broker Kafka cluster (replication factor 3), appropriate partitions, and monitor lag.
-- Load-test and tune pools, indexes, partitioning, gateway replicas, Redis and consumer concurrency based on measurements.
