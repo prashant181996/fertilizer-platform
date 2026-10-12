@@ -17,8 +17,8 @@ spring:
             - name: RequestRateLimiter
               args:
                 key-resolver: "#{@clientKeyResolver}"
-                redis-rate-limiter.replenishRate: 100
-                redis-rate-limiter.burstCapacity: 200
+                redis-rate-limiter.replenishRate: ${RATE_LIMIT_REPLENISH:100}
+                redis-rate-limiter.burstCapacity: ${RATE_LIMIT_BURST:200}
                 redis-rate-limiter.requestedTokens: 1
         - id: inventory-service
           uri: ${INVENTORY_URL:http://localhost:8082}
@@ -30,8 +30,8 @@ spring:
             - name: RequestRateLimiter
               args:
                 key-resolver: "#{@clientKeyResolver}"
-                redis-rate-limiter.replenishRate: 100
-                redis-rate-limiter.burstCapacity: 200
+                redis-rate-limiter.replenishRate: ${RATE_LIMIT_REPLENISH:100}
+                redis-rate-limiter.burstCapacity: ${RATE_LIMIT_BURST:200}
                 redis-rate-limiter.requestedTokens: 1
         - id: payment-service
           uri: ${PAYMENT_URL:http://localhost:8084}

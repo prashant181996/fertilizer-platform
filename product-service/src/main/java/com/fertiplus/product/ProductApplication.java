@@ -1,24 +1,3 @@
 package com.fertiplus.product;
-
-import org.springframework.boot.CommandLineRunner;
-import org.springframework.boot.SpringApplication;
-import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.context.annotation.Bean;
-
-@SpringBootApplication
-public class ProductApplication {
-    public static void main(String[] args) {
-        SpringApplication.run(ProductApplication.class, args);
-    }
-
-    @Bean
-    CommandLineRunner seed(ProductRepository repo) {
-        return args -> {
-            if (repo.count() == 0) {
-                repo.save(new Product(null, "UREA-50", "Urea Fertilizer 50kg", 520.00, true));
-                repo.save(new Product(null, "DAP-50", "DAP Fertilizer 50kg", 1350.00, true));
-                repo.save(new Product(null, "NPK-25", "NPK Fertilizer 25kg", 890.00, true));
-            }
-        };
-    }
-}
+import org.springframework.boot.CommandLineRunner;import org.springframework.boot.SpringApplication;import org.springframework.boot.autoconfigure.SpringBootApplication;import org.springframework.context.annotation.Bean;
+@SpringBootApplication public class ProductApplication {public static void main(String[] args){SpringApplication.run(ProductApplication.class,args);}@Bean CommandLineRunner seed(ProductRepository repo){return args->{if(repo.count()==0){repo.save(new Product(null,"UREA-50","Urea Fertilizer 50kg",520.00,true));repo.save(new Product(null,"DAP-50","DAP Fertilizer 50kg",1350.00,true));repo.save(new Product(null,"NPK-25","NPK Fertilizer 25kg",890.00,true));}};}}
