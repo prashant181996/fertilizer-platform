@@ -1,1 +1,18 @@
-package com.fertiplus.inventory;import org.springframework.data.jpa.repository.JpaRepository;import org.springframework.data.jpa.repository.Lock;import org.springframework.data.jpa.repository.Query;import jakarta.persistence.LockModeType;import java.util.Optional;import org.springframework.data.repository.query.Param;public interface StockRepository extends JpaRepository<Stock,Long>{@Lock(LockModeType.PESSIMISTIC_WRITE) @Query("select s from Stock s where s.productId=:productId") Optional<Stock> findLockedByProductId(@Param("productId") Long productId);Optional<Stock> findByProductId(Long productId);}
+package com.fertiplus.inventory;
+
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Query;
+import jakarta.persistence.LockModeType;
+
+import java.util.Optional;
+
+import org.springframework.data.repository.query.Param;
+
+public interface StockRepository extends JpaRepository<Stock, Long> {
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select s from Stock s where s.productId=:productId")
+    Optional<Stock> findLockedByProductId(@Param("productId") Long productId);
+
+    Optional<Stock> findByProductId(Long productId);
+}
