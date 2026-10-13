@@ -4,7 +4,3 @@
 *.iml
 .env
 .DS_Store
-
-**/data/h2/*.mv.db
-**/data/h2/*.trace.db
-**/data/h2/*.lock.db

@@ -1,0 +1,8 @@
+package com.fertiplus.inventory;
+import com.fasterxml.jackson.databind.JsonNode; import com.fasterxml.jackson.databind.ObjectMapper; import org.springframework.kafka.annotation.KafkaListener; import org.springframework.kafka.core.KafkaTemplate; import org.springframework.stereotype.Component;
+@Component public class InventoryEventConsumer { private final InventoryReservationService service; private final ObjectMapper mapper; private final KafkaTemplate<String,String> kafka; public InventoryEventConsumer(InventoryReservationService service,ObjectMapper mapper,KafkaTemplate<String,String> kafka){this.service=service;this.mapper=mapper;this.kafka=kafka;}
+ @KafkaListener(topics="orders.created",groupId="inventory-service") public void onOrder(String payload) throws Exception {JsonNode n=mapper.readTree(payload);String orderId=n.path("orderId").asText();Long productId=n.path("productId").asLong();int quantity=n.path("quantity").asInt();ReservationEntity r=service.reserve(orderId,productId,quantity);emit(r.orderId,r.status,r.productId,r.quantity);}
+ @KafkaListener(topics="inventory.release",groupId="inventory-release") public void onRelease(String payload) throws Exception {JsonNode n=mapper.readTree(payload);service.release(n.path("orderId").asText());}
+ private void emit(String orderId,String status,Long productId,int quantity)throws Exception {String topic="RESERVED".equals(status)?"inventory.reserved":"inventory.rejected";kafka.send(topic,orderId,mapper.writeValueAsString(new InventoryResult(orderId,status,productId,quantity))).get();}
+ public record InventoryResult(String orderId,String result,Long productId,int quantity){}
+}

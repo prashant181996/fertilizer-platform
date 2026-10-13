@@ -1,164 +1,238 @@
-# Fertilizer Order Management Platform
+# Fertilizer Order Platform — Java 21 / Spring Boot Microservices
 
-Java 21 / Spring Boot 3.4 microservices starter for fertilizer catalog, inventory, order intake, simulated payment, delivery and Kafka-driven notifications.
+A runnable local-development reference project demonstrating asynchronous order acceptance, Kafka-based Saga orchestration, PostgreSQL service-owned data, an order transactional outbox, Redis product caching and API rate limiting, idempotent inventory reservations, persistent payment simulation, delivery creation, and a k6 load-test profile.
 
-> **Honest capacity statement:** this repository is configured for performance testing and documents a path to 10,000 TPS. It has NOT been benchmarked or certified to sustain 10,000 TPS. The current order request still performs synchronous product, inventory and payment calls, so this baseline should not be described as proven for that throughput. See `docs/10k-tps-and-data-ownership.md` for the required scale-out architecture.
+> **Capacity statement:** this is a scalable reference implementation, not a verified 10,000-TPS production system. No 10k-TPS benchmark has been run here. Actual capacity depends on hardware, Kafka/PostgreSQL topology, payloads, order mix, downstream services, and load-test results. The included Compose stack is a single-node development environment and is not highly available.
 
-## Services
-
-| Service | Port | Owns / provides |
-|---|---:|---|
-| API Gateway | 8080 | Routing and Redis-backed per-client limits |
-| Product | 8081 | Fertilizer catalog; owns its H2 file database `products` |
-| Inventory | 8082 | Stock and reservations; owns its H2 file database `inventory` |
-| Order | 8083 | Order records and idempotency keys; owns its H2 file database `orders` |
-| Payment | 8084 | Demo payment authorization (in-memory only; not production durable) |
-| Delivery | 8085 | Demo shipment records (in-memory only; not production durable) |
-| Notification | 8086 | Consumes order events and logs notifications |
-
-## Database choice: H2
-
-Product, inventory and order services each use a separate file-based H2 database, persisted in its own Docker named volume. Payment and delivery have H2 configured for future JPA persistence, but their current demo endpoints still use in-memory state. H2 is intended for local development and functional testing; it is not appropriate as the database tier for a production 10,000 TPS deployment. Each domain remains the sole owner of its own data; do not share H2 files between services. H2 console is disabled by default.
-
-## Run locally
-
-Requirements: Docker Desktop + Compose. Run from this directory:
-
-```bash
-docker compose up --build -d
-docker compose ps
-```
-
-The first run creates each H2 database automatically. Docker named volumes preserve database files across container restarts. `docker compose down -v` deletes those volumes and all local database data.
-
-## Try it
-
-```bash
-curl http://localhost:8080/api/products
-curl -i -X POST http://localhost:8080/api/orders \
-  -H 'Content-Type: application/json' \
-  -H 'X-API-Key: dealer-demo-001' \
-  -H 'Idempotency-Key: demo-order-0001' \
-  -d '{"customerId":"dealer-100","productId":1,"quantity":2}'
-```
-
-A repeated `Idempotency-Key` returns the existing order instead of intentionally creating another order. This reduces duplicate effects but does not replace end-to-end idempotency in inventory/payment and durable Saga recovery.
-
-
-## End-to-end order request flow
-
-The diagram below reflects the current implementation. The HTTP order path is synchronous through product lookup, inventory reservation, and simulated payment authorization. Kafka notification is attempted after the order is confirmed. Delivery is a separate demo API and is not automatically invoked by order creation.
+## Architecture
 
 ```mermaid
 flowchart TD
-    A[Dealer / Client] -->|POST /api/orders + API key + Idempotency-Key| B[API Gateway :8080]
-    B --> C{Redis rate limit allows request?}
-    C -- No --> R[HTTP 429 Too Many Requests]
-    C -- Yes --> D[Order Service :8083]
-    D --> E{Validate customer, product ID, quantity, key}
-    E -- Invalid --> V[HTTP 400 Bad Request]
-    E -- Valid --> F{Idempotency key already exists?}
-    F -- Yes --> G[Return existing order]
-    F -- No --> H[Persist PROCESSING order in Orders H2]
-    H --> I[GET product details]
-    I --> J[Product Service :8081 / Products H2]
-    J --> K{Product lookup successful?}
-    K -- No --> K1[Mark order FAILED; return gateway error]
-    K -- Yes --> L[Calculate total from product price × quantity]
-    L --> M[POST inventory reservation]
-    M --> N[Inventory Service :8082 / Inventory H2]
-    N --> O{Stock available and reservation succeeds?}
-    O -- No --> O1[Mark order FAILED; return HTTP 409]
-    O -- Yes --> P[POST payment authorization]
-    P --> Q[Payment Service :8084 / simulated authorization]
-    Q --> S{Payment succeeds?}
-    S -- No --> S1[Attempt inventory release; mark order FAILED]
-    S1 --> S2[Return payment error]
-    S -- Yes --> T[Save order as CONFIRMED in Orders H2]
-    T --> U[Publish orders.created to Kafka]
-    U --> W[Notification Service :8086 consumes event]
-    W --> X[Write demo notification to service logs]
-    T --> Y[Return HTTP 201 + order response to client]
-    U -. Publish is best-effort in current code .-> Z[If publish fails, order may still be confirmed]
-
-    style R fill:#ffe3e3,stroke:#c62828,color:#222
-    style V fill:#ffe3e3,stroke:#c62828,color:#222
-    style K1 fill:#ffe3e3,stroke:#c62828,color:#222
-    style O1 fill:#ffe3e3,stroke:#c62828,color:#222
-    style S1 fill:#ffe3e3,stroke:#c62828,color:#222
-    style X fill:#e4f5e8,stroke:#2e7d32,color:#222
+    Client[Web / Mobile / Client] --> Gateway[API Gateway :8080]
+    Gateway -->|Redis rate limit| Redis[(Redis)]
+    Gateway -->|POST /api/orders| Order[Order Service :8083]
+    Gateway --> Product[Product Service :8081]
+    Gateway --> Inventory[Inventory Service :8082]
+    Order -->|read price| Product
+    Product --> ProductDB[(PostgreSQL products DB)]
+    Product -->|60-second cache| Redis
+    Order -->|one DB transaction: order + outbox| OrderDB[(PostgreSQL orders DB)]
+    Outbox[Outbox Publisher] --> Kafka[(Kafka)]
+    OrderDB --> Outbox
+    Kafka -->|orders.created| Inventory
+    Inventory --> InventoryDB[(PostgreSQL inventory DB)]
+    Inventory -->|inventory.reserved / rejected| Kafka
+    Kafka -->|inventory result| Order
+    Order -->|payment.requested| Kafka
+    Kafka --> Payment[Payment Service :8084]
+    Payment --> PaymentDB[(PostgreSQL payments DB)]
+    Payment -->|payment.authorized / failed| Kafka
+    Kafka -->|payment result| Order
+    Order -->|orders.confirmed| Kafka
+    Kafka --> Delivery[Delivery Service :8085]
+    Delivery --> DeliveryDB[(PostgreSQL delivery DB)]
+    Kafka --> Notification[Notification Service :8086]
 ```
 
-### Sequence view
+### End-to-end order flow
 
 ```mermaid
 sequenceDiagram
-    autonumber
     participant C as Client
-    participant G as API Gateway
-    participant R as Redis
+    participant G as Gateway
     participant O as Order Service
     participant P as Product Service
+    participant DB as Order PostgreSQL
+    participant K as Kafka
     participant I as Inventory Service
     participant Pay as Payment Service
-    participant K as Kafka
-    participant N as Notification Service
-
-    C->>G: POST /api/orders (API key, Idempotency-Key)
-    G->>R: Check rate limit
-    R-->>G: Allow / reject
-    G->>O: Forward order request
-    O->>O: Validate and check idempotency key
-    O->>O: Persist PROCESSING order
-    O->>P: GET /api/products/{productId}
-    P-->>O: Product details and price
-    O->>I: POST /api/inventory/reservations
-    I-->>O: Reservation result
-    O->>Pay: POST /api/payments/authorize
-    Pay-->>O: Simulated authorization result
+    participant D as Delivery Service
+    C->>G: POST /api/orders + Idempotency-Key
+    G->>O: Forward request
+    O->>P: Read product and price
+    P-->>O: Product details (Redis cached)
+    O->>DB: Transaction: save PENDING order + outbox event
+    DB-->>O: Commit
+    O-->>C: 202 Accepted + orderId
+    O->>K: Outbox publisher sends orders.created
+    K->>I: Reserve inventory atomically
+    I->>K: inventory.reserved or inventory.rejected
+    K->>O: Inventory result
+    O->>K: payment.requested
+    K->>Pay: Process idempotent payment simulation
+    Pay->>K: payment.authorized or payment.failed
+    K->>O: Payment result
     alt Payment authorized
-        O->>O: Persist CONFIRMED order
-        O-)K: Send orders.created event (best effort)
-        O-->>G: 201 Created + order
-        G-->>C: 201 Created + order
-        K-->>N: Deliver orders.created event
-        N->>N: Log demo notification
+      O->>DB: Mark CONFIRMED
+      O->>K: orders.confirmed
+      K->>D: Create durable shipment record
     else Payment failed
-        O->>I: POST /api/inventory/release (compensation attempt)
-        O->>O: Mark order FAILED
-        O-->>G: Error response
-        G-->>C: Error response
+      O->>DB: Mark FAILED
+      O->>K: inventory.release
+      K->>I: Release reservation idempotently
     end
 ```
 
-## Single source of truth and service data ownership
+## Services and ports
 
-- **Product Service** is authoritative for product catalog and price.
-- **Inventory Service** is authoritative for stock and reservations.
-- **Order Service** is authoritative for order state and idempotency keys.
-- **Payment Service** and **Delivery Service** currently use in-memory demo state; durable persistence is not yet implemented even though H2 configuration is present.
-- **Redis** stores rate-limit state; it is not the source of truth for orders or inventory.
-- **Kafka** transports events; messages and consumer state are not substitutes for the owning service's business database.
+| Service | Port | Owns |
+|---|---:|---|
+| API Gateway | 8080 | Routing and Redis rate limiting |
+| Product Service | 8081 | Product catalog; Redis read cache |
+| Inventory Service | 8082 | Available stock and unique reservation per order |
+| Order Service | 8083 | Order state, idempotency keys, transactional outbox, Saga orchestration |
+| Payment Service | 8084 | Durable payment simulation, unique payment per order |
+| Delivery Service | 8085 | Durable shipment records created from confirmed-order events |
+| Notification Service | 8086 | Consumes confirmed-order events (logs a demo notification) |
+| PostgreSQL | 5432 | Separate logical database per service |
+| Redis | 6379 | Gateway rate limiting and product cache |
+| Kafka | 9092 | Order, inventory, payment and confirmation events |
 
-Services must access another domain through its API or events, not by opening another service's H2 database file. The current order workflow uses best-effort compensation and best-effort Kafka publication; use a durable Saga plus transactional outbox and end-to-end idempotency before production use.
+Each service writes only to its own logical database. The Compose PostgreSQL instance and credentials are shared for local development only; use independent credentials and appropriately managed databases in production.
 
-## Rate limiting and load test
+## Requirements
 
-The gateway rate limiter is per API key: 100 tokens/sec with a burst of 200 in the starter config. Aggregate throughput depends on gateway replicas, Redis capacity, API-key distribution, downstream services, and the request mix. Do not simply set one client key to 10,000 TPS.
+- Docker Engine and Docker Compose v2
+- `curl` (or PowerShell `Invoke-RestMethod`) for API tests
+- Optional: [k6](https://k6.io/) to run load tests
+- Optional: Java 21 and Maven 3.9+ to build locally outside Docker
 
-Use k6 from a machine with k6 installed. Begin with a low rate and increase gradually:
+## Start the complete platform
+
+From the project root (optionally copy `.env.example` to `.env` and set local credentials first):
 
 ```bash
-k6 run -e BASE_URL=http://localhost:8080 -e RATE=100 -e DURATION=1m load-test/k6-orders.js
+docker compose up --build -d
 ```
 
-A 10,000 request/sec test should be run against a production-like multi-node environment, with a separate load generator, sufficient distinct authenticated clients, pre-provisioned stock, and defined latency/error SLOs. The included local Compose stack is for functional development, not a 10k TPS proof.
+Check service status and logs:
 
-## Production gaps
+```bash
+docker compose ps
+docker compose logs -f order-service inventory-service payment-service
+```
 
-- Replace synchronous orchestration with durable asynchronous acceptance + transactional outbox + Kafka consumers + Saga state machine and compensation.
-- Persist payment and delivery state; the included implementations are in-memory demos.
-- Add service-specific DB users/credentials, Flyway migrations, backup/restore, TLS, secrets management, OAuth2/JWT, authorization, audit logs and observability.
-- Add idempotency to reservation/release/payment operations, including durable unique keys.
-- Use a multi-broker Kafka cluster (replication factor 3), appropriate partitions, and monitor lag.
-- Load-test and tune pools, indexes, partitioning, gateway replicas, Redis and consumer concurrency based on measurements.
+Wait for services to finish starting. Health endpoints:
+
+- `http://localhost:8080/actuator/health` — gateway
+- `http://localhost:8081/actuator/health` — product
+- `http://localhost:8082/actuator/health` — inventory
+- `http://localhost:8083/actuator/health` — order
+- `http://localhost:8084/actuator/health` — payment
+- `http://localhost:8085/actuator/health` — delivery
+- `http://localhost:8086/actuator/health` — notification
+
+The sample catalog is seeded on first startup:
+
+| Product ID | SKU | Example price (INR) |
+|---:|---|---:|
+| 1 | UREA-50 | 520.00 |
+| 2 | DAP-50 | 1,350.00 |
+| 3 | NPK-25 | 890.00 |
+
+The inventory seed values are intentionally large for load-test demonstrations. They are not real business stock values.
+
+## Create an order
+
+**Linux/macOS/Git Bash:**
+
+```bash
+curl -i -X POST http://localhost:8080/api/orders \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: local-demo-client' \
+  -H 'Idempotency-Key: order-demo-0001' \
+  -d '{"customerId":"C1001","productId":1,"quantity":2}'
+```
+
+**PowerShell:**
+
+```powershell
+$body = @{ customerId = 'C1001'; productId = 1; quantity = 2 } | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri 'http://localhost:8080/api/orders' `
+  -Headers @{ 'X-API-Key' = 'local-demo-client'; 'Idempotency-Key' = 'order-demo-0001' } `
+  -ContentType 'application/json' -Body $body
+```
+
+Expected response is **HTTP 202 Accepted**, containing `orderId` and `status: PENDING`. The order then progresses asynchronously. Query its state using the returned ID:
+
+```bash
+curl http://localhost:8080/api/orders/REPLACE_WITH_ORDER_ID
+```
+
+Expected eventual state is `CONFIRMED` when inventory and the demo payment flow succeed, or `FAILED` when inventory is unavailable or a payment step fails. Reusing the same idempotency key returns the original order instead of creating another order. Use a new key for a new order.
+
+Additional endpoints:
+
+- `GET /api/products`
+- `GET /api/products/1`
+- `GET /api/inventory/1`
+- `GET /api/orders`
+- `GET /api/orders/{orderId}`
+- `GET /api/payments/{orderId}` after payment processing
+- `GET /api/deliveries/{orderId}` after confirmation
+
+## How consistency is handled
+
+- **Order acceptance:** the order row and `orders.created` outbox record are written in one PostgreSQL transaction. An asynchronous scheduled publisher sends pending outbox events to Kafka in batches. A crash after publish but before marking an event published can cause duplicate delivery, so consumers are designed to be idempotent.
+- **Inventory:** stock is decremented with a conditional atomic SQL update. A database reservation record with a unique order ID prevents double reservation. Releases are idempotent.
+- **Payment:** payment records are persisted and unique per order. This project simulates an authorization; it does not charge a real card or connect to a payment gateway. A real provider must receive a stable idempotency key and its ambiguous timeout state must be reconciled before compensation.
+- **Saga:** order state changes through `PENDING`, `PAYMENT_PENDING`, `CONFIRMED`, and `FAILED`. Payment failure triggers an inventory-release event. Downstream consumers can retry and duplicate events are expected in an at-least-once system.
+- **Dead-letter topics:** listener failures are retried with backoff, then routed to a `.DLT` topic. Monitor DLT volume and provide an operational replay/recovery process before production.
+- **Delivery and notification:** confirmed-order events create a durable shipment record and log a demo notification. No real courier, email, SMS, or push provider is configured.
+
+## Rate limiting and scaling
+
+The Gateway uses Redis-backed token-bucket rate limiting. Defaults in the local configuration are 1,000 tokens/second and a burst of 2,000 **per resolved API key**. This is a per-client limit, not a guaranteed platform throughput figure. A client sending 10,000 requests/sec with one key will be throttled by design. Use different client keys only when they represent distinct legitimate clients; do not use key rotation to bypass production limits.
+
+To scale application instances in a production orchestrator, configure multiple replicas, resource requests/limits, readiness/liveness probes, rolling updates, and autoscaling. Scale Kafka consumers using consumer lag and processing latency, not CPU alone. Database pool limits must be budgeted across all replicas; multiplying a 20-connection pool by many pods can exhaust PostgreSQL connections.
+
+The local Compose setup intentionally has one Kafka broker and one PostgreSQL instance. For production, use multi-AZ managed Kafka/PostgreSQL/Redis or equivalent HA deployments, Kafka replication factor 3 (and suitable min ISR), TLS/SASL/ACLs, secrets management, backups, migrations, alerting, and disaster-recovery testing. Local topic replication factor is 1 because Compose runs a single broker.
+
+## Load testing with k6
+
+Start at low rates and ramp gradually. Do not begin with 10,000 requests/sec on an unmeasured environment.
+
+```bash
+BASE_URL=http://localhost:8080 RATE=100 DURATION=1m k6 run load-test/k6-orders.js
+BASE_URL=http://localhost:8080 RATE=1000 DURATION=2m k6 run load-test/k6-orders.js
+BASE_URL=http://localhost:8080 RATE=10000 DURATION=5m PRE_VUS=1000 MAX_VUS=5000 k6 run load-test/k6-orders.js
+```
+
+PowerShell example:
+
+```powershell
+$env:BASE_URL='http://localhost:8080'; $env:RATE='1000'; $env:DURATION='2m'; k6 run load-test/k6-orders.js
+```
+
+The load test checks that order creation returns HTTP 202 and uses unique idempotency keys. Track request rate, p95/p99 latency, failures, PostgreSQL pool utilization, Kafka consumer lag, outbox age, DLT messages, and the eventual count of `CONFIRMED`/`FAILED` orders. The test generator must have enough CPU/network capacity. HTTP acceptance throughput is not the same as completed-order throughput. For 10k TPS, test the full system and verify stable backlog and business correctness over an extended run.
+
+## Useful commands
+
+```bash
+# Tail all logs
+docker compose logs -f
+
+# Stop containers but retain database volume
+docker compose down
+
+# Stop and DELETE local database data (destructive)
+docker compose down -v
+```
+
+## Production gaps to close before real money or 10k TPS
+
+1. Replace demo payment authorization with a real provider integration, provider-side idempotency, reconciliation, and secure secret storage.
+2. Use managed multi-node Kafka/PostgreSQL/Redis with replication, authentication, TLS, backups, and tested recovery procedures.
+3. Add OAuth2/JWT authorization, tenant/customer authorization checks, request size limits, and security hardening; the local demo does not implement full authentication.
+4. Add a proper database migration tool (Flyway/Liquibase) rather than relying on Hibernate `ddl-auto=update`.
+5. Add end-to-end tracing, dashboards, SLO alerts, consumer lag/outbox-age/DLT alerts, and controlled DLT replay.
+6. Benchmark representative order mixes and payloads; tune partition count, consumers, pools, cache TTLs, JVM, CPU/memory and database indexes from evidence.
+7. Run concurrency, duplicate-event, crash-recovery, payment-timeout, stock-contention, failover, and long-duration soak tests.
+
+## Troubleshooting
+
+- If the Gateway returns `429`, the per-key Redis rate limit is active. Reduce load or configure an appropriate limit for the test environment.
+- If an order stays `PENDING`, inspect `order-service`, `inventory-service`, Kafka topics/consumer lag, and the outbox table.
+- If an order stays `PAYMENT_PENDING`, inspect `payment-service` logs and the `payment.requested` topic.
+- If a message lands in a `.DLT` topic, inspect the payload and consumer logs before replaying it.
+- If you change the Postgres init SQL after the database volume already exists, it will not run again automatically. For a disposable local environment only, `docker compose down -v` recreates the databases and removes all stored data.

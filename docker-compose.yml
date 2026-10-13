@@ -1,4 +1,17 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: fertilizer
+      POSTGRES_USER: ${DB_USER:-fertilizer}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-fertilizer_dev_password}
+    ports: ["5432:5432"]
+    volumes: ["pgdata:/var/lib/postgresql/data", "./infra/postgres/init:/docker-entrypoint-initdb.d:ro"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d fertilizer"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
   redis:
     image: redis:7-alpine
     ports: ["6379:6379"]
@@ -11,6 +24,7 @@ services:
     image: bitnami/kafka:3.8
     ports: ["9092:9092"]
     environment:
+      ALLOW_PLAINTEXT_LISTENER: "yes"
       KAFKA_CFG_NODE_ID: 0
       KAFKA_CFG_PROCESS_ROLES: controller,broker
       KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 0@kafka:9093
@@ -19,6 +33,11 @@ services:
       KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
       KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_CFG_DEFAULT_REPLICATION_FACTOR: 1
+      KAFKA_CFG_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_CFG_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_CFG_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_CFG_NUM_PARTITIONS: 24
     healthcheck:
       test: ["CMD-SHELL", "kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
       interval: 10s
@@ -27,40 +46,51 @@ services:
   product-service:
     build: {context: ., dockerfile: product-service/Dockerfile}
     environment:
-      DB_URL: jdbc:h2:file:/data/h2/products;DB_CLOSE_ON_EXIT=FALSE;AUTO_SERVER=FALSE
-      DB_USER: sa
-      DB_PASSWORD: ""
-      DB_POOL_MAX: 10
-      H2_CONSOLE_ENABLED: "false"
-    volumes: ["product-h2:/data/h2"]
+      DB_URL: jdbc:postgresql://postgres:5432/fertilizer_products
+      DB_USER: ${DB_USER:-fertilizer}
+      DB_PASSWORD: ${DB_PASSWORD:-fertilizer_dev_password}
+      DB_POOL_MAX: 20
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
     ports: ["8081:8081"]
   inventory-service:
     build: {context: ., dockerfile: inventory-service/Dockerfile}
     environment:
-      DB_URL: jdbc:h2:file:/data/h2/inventory;DB_CLOSE_ON_EXIT=FALSE;AUTO_SERVER=FALSE
-      DB_USER: sa
-      DB_PASSWORD: ""
-      DB_POOL_MAX: 10
-      H2_CONSOLE_ENABLED: "false"
-    volumes: ["inventory-h2:/data/h2"]
+      DB_URL: jdbc:postgresql://postgres:5432/fertilizer_inventory
+      DB_USER: ${DB_USER:-fertilizer}
+      DB_PASSWORD: ${DB_PASSWORD:-fertilizer_dev_password}
+      DB_POOL_MAX: 20
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    depends_on:
+      postgres: {condition: service_healthy}
+      kafka: {condition: service_healthy}
     ports: ["8082:8082"]
   payment-service:
     build: {context: ., dockerfile: payment-service/Dockerfile}
     environment:
-      DB_URL: jdbc:h2:file:/data/h2/payments;DB_CLOSE_ON_EXIT=FALSE;AUTO_SERVER=FALSE
-      DB_USER: sa
-      DB_PASSWORD: ""
-      H2_CONSOLE_ENABLED: "false"
-    volumes: ["payment-h2:/data/h2"]
+      DB_URL: jdbc:postgresql://postgres:5432/fertilizer_payments
+      DB_USER: ${DB_USER:-fertilizer}
+      DB_PASSWORD: ${DB_PASSWORD:-fertilizer_dev_password}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      DB_POOL_MAX: 20
+    depends_on:
+      postgres: {condition: service_healthy}
+      kafka: {condition: service_healthy}
     ports: ["8084:8084"]
   delivery-service:
     build: {context: ., dockerfile: delivery-service/Dockerfile}
     environment:
-      DB_URL: jdbc:h2:file:/data/h2/deliveries;DB_CLOSE_ON_EXIT=FALSE;AUTO_SERVER=FALSE
-      DB_USER: sa
-      DB_PASSWORD: ""
-      H2_CONSOLE_ENABLED: "false"
-    volumes: ["delivery-h2:/data/h2"]
+      DB_URL: jdbc:postgresql://postgres:5432/fertilizer_delivery
+      DB_USER: ${DB_USER:-fertilizer}
+      DB_PASSWORD: ${DB_PASSWORD:-fertilizer_dev_password}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      DB_POOL_MAX: 10
+    depends_on:
+      postgres: {condition: service_healthy}
+      kafka: {condition: service_healthy}
     ports: ["8085:8085"]
   notification-service:
     build: {context: ., dockerfile: notification-service/Dockerfile}
@@ -72,17 +102,19 @@ services:
   order-service:
     build: {context: ., dockerfile: order-service/Dockerfile}
     environment:
-      DB_URL: jdbc:h2:file:/data/h2/orders;DB_CLOSE_ON_EXIT=FALSE;AUTO_SERVER=FALSE
-      DB_USER: sa
-      DB_PASSWORD: ""
-      DB_POOL_MAX: 10
+      DB_URL: jdbc:postgresql://postgres:5432/fertilizer_orders
+      DB_USER: ${DB_USER:-fertilizer}
+      DB_PASSWORD: ${DB_PASSWORD:-fertilizer_dev_password}
+      DB_POOL_MAX: 30
       PRODUCT_URL: http://product-service:8081
       INVENTORY_URL: http://inventory-service:8082
       PAYMENT_URL: http://payment-service:8084
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      H2_CONSOLE_ENABLED: "false"
-    volumes: ["order-h2:/data/h2"]
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
     depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
       product-service: {condition: service_started}
       inventory-service: {condition: service_started}
       payment-service: {condition: service_started}
@@ -106,8 +138,4 @@ services:
       delivery-service: {condition: service_started}
     ports: ["8080:8080"]
 volumes:
-  product-h2:
-  inventory-h2:
-  order-h2:
-  payment-h2:
-  delivery-h2:
+  pgdata:

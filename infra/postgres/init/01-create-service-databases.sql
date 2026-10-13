@@ -3,3 +3,6 @@
 CREATE DATABASE fertilizer_orders;
 CREATE DATABASE fertilizer_products;
 CREATE DATABASE fertilizer_inventory;
+
+CREATE DATABASE fertilizer_payments;
+CREATE DATABASE fertilizer_delivery;

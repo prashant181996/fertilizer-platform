@@ -1,0 +1,3 @@
+package com.fertiplus.delivery;
+import jakarta.persistence.*; import java.time.Instant; import java.util.UUID;
+@Entity @Table(name="shipments",uniqueConstraints=@UniqueConstraint(name="uk_shipment_order",columnNames="order_id")) public class Shipment { @Id public String id; @Column(name="order_id",nullable=false,unique=true) public String orderId; public String address; @Column(nullable=false) public String status; @Column(nullable=false) public Instant createdAt=Instant.now(); protected Shipment(){} public Shipment(String orderId,String address,String status){this.id=UUID.randomUUID().toString();this.orderId=orderId;this.address=address;this.status=status;this.createdAt=Instant.now();} }

@@ -1,0 +1,6 @@
+package com.fertiplus.order;
+import org.springframework.dao.DataIntegrityViolationException; import org.springframework.http.HttpStatus; import org.springframework.stereotype.Service; import org.springframework.web.server.ResponseStatusException; import java.util.Map;
+@Service public class OrderService { private final OrderRepository orders; private final OrderPersistenceService persistence; private final ProductCatalogClient catalog; public OrderService(OrderRepository orders,OrderPersistenceService persistence,ProductCatalogClient catalog){this.orders=orders;this.persistence=persistence;this.catalog=catalog;}
+ public OrderEntity create(OrderController.CreateOrder req,String key){var old=orders.findByIdempotencyKey(key);if(old.isPresent())return old.get();Map<?,?> product=catalog.getById(req.productId());Object raw=product.get("price");if(!(raw instanceof Number))throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,"Product price is invalid");double total=((Number)raw).doubleValue()*req.quantity();try{return persistence.persist(req,key,total);}catch(DataIntegrityViolationException e){return orders.findByIdempotencyKey(key).orElseThrow(()->e);}}
+ public record OrderCreated(String orderId,String customerId,Long productId,int quantity,double total){}
+}

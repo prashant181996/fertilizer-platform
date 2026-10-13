@@ -12,5 +12,5 @@ export default function () {
   const id = `${__VU}-${__ITER}-${Date.now()}-${Math.random()}`;
   const payload = JSON.stringify({ customerId: `load-${__VU}`, productId: Number(__ENV.PRODUCT_ID || 1), quantity: 1, idempotencyKey: `k6-${id}` });
   const response = http.post(`${__ENV.BASE_URL || 'http://localhost:8080'}/api/orders`, payload, { headers: { 'Content-Type': 'application/json', 'X-API-Key': `load-client-${__VU % Number(__ENV.CLIENT_KEYS || 200)}`, 'Idempotency-Key': `k6-${id}` }, tags: { endpoint: 'create-order' } });
-  check(response, { 'accepted/created or expected business/rate-limit response': r => [200, 201, 202, 409, 429, 502, 503].includes(r.status) });
+  check(response, { 'order accepted': r => r.status === 202 });
 }

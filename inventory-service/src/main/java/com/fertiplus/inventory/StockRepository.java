@@ -1,18 +1,3 @@
 package com.fertiplus.inventory;
-
-import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.data.jpa.repository.Lock;
-import org.springframework.data.jpa.repository.Query;
-import jakarta.persistence.LockModeType;
-
-import java.util.Optional;
-
-import org.springframework.data.repository.query.Param;
-
-public interface StockRepository extends JpaRepository<Stock, Long> {
-    @Lock(LockModeType.PESSIMISTIC_WRITE)
-    @Query("select s from Stock s where s.productId=:productId")
-    Optional<Stock> findLockedByProductId(@Param("productId") Long productId);
-
-    Optional<Stock> findByProductId(Long productId);
-}
+import org.springframework.data.jpa.repository.JpaRepository; import org.springframework.data.jpa.repository.Modifying; import org.springframework.data.jpa.repository.Query; import org.springframework.data.repository.query.Param; import java.util.Optional;
+public interface StockRepository extends JpaRepository<Stock,Long> { Optional<Stock> findByProductId(Long productId); @Modifying @Query("update Stock s set s.available=s.available-:qty where s.productId=:id and s.available>=:qty") int reserve(@Param("id") Long id,@Param("qty") int qty); @Modifying @Query("update Stock s set s.available=s.available+:qty where s.productId=:id") int release(@Param("id") Long id,@Param("qty") int qty); }

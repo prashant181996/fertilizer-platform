@@ -1,60 +1,54 @@
-# 10,000 TPS and Single Source of Truth
+# 10k TPS capacity planning and data ownership
 
-## What “single source of truth” means here
+## What TPS means
 
-Do not let multiple services independently write the same business fact. Each domain has one authoritative owner and its own write database:
+Report these separately:
 
-- **Orders:** Order Service / `fertilizer_orders`. Order status, customer reference, quantity, accepted price snapshot and idempotency key live here.
-- **Catalog and price:** Product Service / `fertilizer_products`. The order may store a price snapshot for the transaction, but only Product Service changes catalog pricing.
-- **Available/reserved stock:** Inventory Service / `fertilizer_inventory`. No other service updates stock directly. Reservation commands must be idempotent and atomic.
-- **Payments:** Payment Service must own durable payment intents/authorizations in a dedicated database (not implemented in this demo; current map is in-memory).
-- **Delivery:** Delivery Service must own durable shipment state (not implemented in this demo; current map is in-memory).
+1. **Ingress TPS:** HTTP requests accepted by the Gateway.
+2. **Order-acceptance TPS:** orders durably committed with an outbox row and returned as `202`.
+3. **Completion TPS:** orders that reach a terminal business state (`CONFIRMED` or `FAILED`).
 
-Kafka events are immutable facts/change notifications, not a second writable master. Consumers may keep rebuildable projections/caches, clearly treated as derived data. Include event IDs, aggregate IDs, schema versions and timestamps; make consumers idempotent.
+The platform is not proven to sustain 10,000 TPS until all three are measured under representative traffic and the backlog is stable. A queue can hide overload temporarily; a growing Kafka lag/outbox backlog means the system is not keeping up.
 
-The local Compose setup uses one H2 for local development (PostgreSQL or another production database for deployment) container but separate logical databases for order/product/inventory. That provides logical ownership for development only. Production should use separate service credentials and preferably independently managed databases or clusters as required by isolation/availability goals. Never let one service write another service's tables.
+## Request path and critical path
 
-## Architecture required to target 10k TPS
+The synchronous request path performs a cached product lookup and one local PostgreSQL transaction for the order plus outbox event. Inventory, payment simulation, order confirmation, delivery, and notification are asynchronous Kafka consumers. The order endpoint does not wait for payment or delivery and responds with `202 Accepted` only after persistence.
 
-The current demo's order endpoint calls Product, Inventory and Payment synchronously. That multiplies network hops and holds request threads during downstream latency. It is **not** a demonstrated 10k TPS design. Move the hot path to durable asynchronous acceptance:
+## Data ownership
 
-1. Gateway authenticates the client, enforces per-client quotas and a separate aggregate admission-control budget.
-2. Order Service validates request shape, claims a unique idempotency key and commits an `ACCEPTED/PENDING` order plus an outbox event in the same database transaction. Return `202 Accepted` with order ID/status; do not claim the order is confirmed yet.
-3. An outbox publisher emits to Kafka only after the database commit. It retries safely; duplicate events are expected and consumers deduplicate by event ID.
-4. A partitioned order workflow/Saga consumes the request and calls domain commands. Inventory atomically reserves stock with a durable reservation ID; payment uses the order ID as its idempotency key. Persist each Saga step and compensate on failure.
-5. Order Service alone transitions the order state. Inventory, Payment and Delivery own their own states. Events carry updates; read models are projections, never alternative masters.
-6. Notification and analytics run asynchronously and never block order acceptance.
+| Service | Authoritative data | Consistency boundary |
+|---|---|---|
+| Product | Catalog and prices | PostgreSQL product DB; short-lived Redis cache |
+| Order | Order state, idempotency key, outbox, Saga state | One PostgreSQL transaction for order + initial event |
+| Inventory | Available stock and reservations | Conditional atomic update + unique reservation per order |
+| Payment | Payment authorization record | Unique payment record per order; demo authorization only |
+| Delivery | Shipment state | Unique shipment per order, created from confirmed event |
+| Notification | Delivery attempt/logs in this demo | Consumer of confirmed-order event; provider not integrated |
 
-## Capacity planning checklist
+No service should update another service's tables. Use events or APIs. Do not use Redis as the source of truth for stock or payments.
 
-10,000 TPS is a measured system property, not a configuration toggle. Define whether TPS means accepted HTTP requests, accepted orders, or fully completed orders. They are different rates.
+## Initial capacity estimate
 
-- Use a multi-node Kubernetes deployment; run multiple stateless gateway and service replicas behind load balancers.
-- Redis-backed per-client limits protect fairness; aggregate admission control must protect total platform capacity. Size Redis and avoid one hot key. Rate-limit rejection should be a clear `429` response.
-- Kafka: multi-broker cluster, replication factor 3, partitions sized to required parallelism, producer batching/compression, consumer concurrency and lag alerts. Partition by order ID when per-order ordering matters.
-- H2 for local development (PostgreSQL or another production database for deployment): independent domain databases, connection pools sized in aggregate against server connection capacity, short transactions, proper indexes, durable idempotency constraints, outbox indexes, backups and tested recovery. Do not set a huge Hikari pool on every replica; `replicas × pool size` must fit database capacity.
-- Inventory contention is a likely bottleneck for popular SKUs. Use conditional atomic updates/reservation rows and partition inventory by product/warehouse where needed; do not rely on a single globally hot row for every order.
-- Cache catalog reads only as a rebuildable projection with a clear freshness policy. Catalog's database remains authoritative. Never cache available stock as the authority for reservations.
-- Set timeouts, bounded retries with jitter, circuit breakers, backpressure, dead-letter topics, replay tooling and reconciliation jobs. Do not retry non-idempotent side effects blindly.
-- Observability: request rate, p50/p95/p99 latency, 4xx/5xx, DB pool wait, lock waits, Kafka publish errors/consumer lag, Redis latency, order state age and Saga compensation rate.
+Do not select replica counts from TPS alone. Benchmark each component independently and end-to-end. For an observed sustainable per-instance throughput `r`, a rough first estimate is `ceil(targetTPS / r)` instances before headroom; add capacity for bursts, failure of one zone, uneven partitions, deployments and retries. This estimate is only useful when `r` is measured with realistic dependencies and latency targets.
 
-## Benchmark protocol
+The development Compose stack has one PostgreSQL instance, one Kafka broker, and one Redis instance. It is intended for functional testing and initial profiling, not production 10k TPS. Production needs multi-node/managed infrastructure, replication, authentication, encryption, backups, resource sizing, tracing, SLO alerts, failover tests and a sustained load test.
 
-1. Specify workload (payload sizes, read/write ratio, SKU skew, duplicate retries), data volume, target p95/p99 latency and acceptable error rate.
-2. Start at 100 TPS, then 500, 1k, 2k, 5k, 8k and 10k TPS; hold each step long enough to stabilize.
-3. Use a separate load generator and enough unique authenticated API keys so the per-key limiter does not artificially cap aggregate load. Keep the gateway enabled.
-4. Test both acceptance throughput and end-to-end completion throughput. Monitor Kafka lag and pending-order age so buffering does not disguise a downstream bottleneck.
-5. Run soak, burst, dependency failure, duplicate request, broker restart and database failover tests.
-6. Record hardware, replicas, pool sizes, Kafka partitions, p95/p99 latency, error rate and sustained throughput. Only claim 10k TPS after repeatable runs meet the SLO without unbounded lag.
+## Load-test acceptance criteria
 
-## Known limitations in this repository
+- Ramp through 100, 500, 1,000, 2,500, 5,000 and 10,000 offered requests/sec.
+- Define a latency objective (for example p95 and p99) before running the test.
+- Confirm the accepted request rate, status-code/error rate and durable order count.
+- Confirm the eventual terminal-state count and expected stock/payment outcomes.
+- Watch Kafka consumer lag, outbox age, dead-letter topic count, DB connection pool saturation, locks, CPU, memory and GC.
+- Run a sustained soak test and a failure/recovery test, not only a short spike.
+- Make sure k6 has enough CPU/network and uses realistic client-key distribution. The Gateway's rate limit is per key.
 
-- The current order API still performs synchronous downstream calls; the full outbox/Saga flow described above is an architectural next step, not already implemented.
-- Payment and delivery demo state is in-memory and disappears on restart.
-- Local Kafka is single-broker with replication factor 1; it is not highly available.
-- The local Compose environment and load script have not been benchmarked at 10k TPS.
+## Required production work
 
-
-## H2 profile notes
-
-The local Compose stack uses one file-based H2 database and named volume per data-owning service. H2 is suitable for demos and functional tests, not as a credible basis for claiming 10,000 TPS in production. For a production throughput target, retain single-writer ownership per domain but use a production database with replication, backups, metrics and load-tested connection pools. Never point multiple service replicas at the same H2 file unless using a specifically supported shared-server topology; this project intentionally gives each domain one file volume for local development.
+- Replace demo payment authorization with a real provider, provider idempotency, reconciliation and secure secret handling.
+- Use a database migration tool instead of Hibernate `ddl-auto=update`.
+- Deploy Kafka with replication factor 3 and suitable minimum ISR; the local single-broker config must use replication factor 1.
+- Deploy PostgreSQL and Redis in highly available configurations and budget connection pools across all replicas.
+- Add OAuth2/JWT authentication, authorization, request quotas, schema validation, rate-limit policies and audit controls.
+- Implement alerting and controlled replay for `.DLT` topics, plus recovery playbooks.
+- Test duplicates, crash windows, provider timeouts, hot-product inventory contention, partition imbalance, node failure and long-duration throughput.
