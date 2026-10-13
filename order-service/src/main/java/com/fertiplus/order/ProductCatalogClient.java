@@ -1,3 +1,35 @@
 package com.fertiplus.order;
-import org.springframework.beans.factory.annotation.Value; import org.springframework.cache.annotation.Cacheable; import org.springframework.http.HttpStatus; import org.springframework.stereotype.Service; import org.springframework.web.client.RestClient; import org.springframework.web.server.ResponseStatusException; import java.util.Map;
-@Service public class ProductCatalogClient { private final RestClient http; private final String productUrl; public ProductCatalogClient(RestClient.Builder builder,@Value("${services.product-url:http://localhost:8081}") String productUrl){this.http=builder.build();this.productUrl=productUrl;} @Cacheable(cacheNames="orderProductById",key="#productId") public Map<?,?> getById(Long productId){try{Map<?,?> product=http.get().uri(productUrl+"/api/products/{id}",productId).retrieve().body(Map.class);if(product==null||!Boolean.TRUE.equals(product.get("active")))throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Product is unavailable");return product;}catch(ResponseStatusException e){throw e;}catch(Exception e){throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,"Product service unavailable or product not found");}} }
+
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Service;
+import org.springframework.web.client.RestClient;
+import org.springframework.web.server.ResponseStatusException;
+
+import java.util.Map;
+
+@Service
+public class ProductCatalogClient {
+    private final RestClient http;
+    private final String productUrl;
+
+    public ProductCatalogClient(RestClient.Builder builder, @Value("${services.product-url:http://localhost:8081}") String productUrl) {
+        this.http = builder.build();
+        this.productUrl = productUrl;
+    }
+
+    @Cacheable(cacheNames = "orderProductById", key = "#productId")
+    public Map<?, ?> getById(Long productId) {
+        try {
+            Map<?, ?> product = http.get().uri(productUrl + "/api/products/{id}", productId).retrieve().body(Map.class);
+            if (product == null || !Boolean.TRUE.equals(product.get("active")))
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Product is unavailable");
+            return product;
+        } catch (ResponseStatusException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Product service unavailable or product not found");
+        }
+    }
+}

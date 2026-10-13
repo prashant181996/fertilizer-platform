@@ -1,1 +1,24 @@
-package com.fertiplus.inventory;import org.springframework.boot.CommandLineRunner;import org.springframework.boot.SpringApplication;import org.springframework.boot.autoconfigure.SpringBootApplication;import org.springframework.context.annotation.Bean;@SpringBootApplication public class InventoryApplication {public static void main(String[] args){SpringApplication.run(InventoryApplication.class,args);}@Bean CommandLineRunner seed(StockRepository r){return a->{if(r.count()==0){r.save(new Stock(null,1L,100000000));r.save(new Stock(null,2L,50000000));r.save(new Stock(null,3L,75000000));}};}}
+package com.fertiplus.inventory;
+
+import org.springframework.boot.CommandLineRunner;
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.context.annotation.Bean;
+
+@SpringBootApplication
+public class InventoryApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(InventoryApplication.class, args);
+    }
+
+    @Bean
+    CommandLineRunner seed(StockRepository r) {
+        return a -> {
+            if (r.count() == 0) {
+                r.save(new Stock(null, 1L, 100000000));
+                r.save(new Stock(null, 2L, 50000000));
+                r.save(new Stock(null, 3L, 75000000));
+            }
+        };
+    }
+}

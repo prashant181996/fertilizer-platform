@@ -1,3 +1,22 @@
 package com.fertiplus.payment;
-import org.springframework.http.HttpStatus; import org.springframework.web.bind.annotation.*; import org.springframework.web.server.ResponseStatusException; import java.util.Map;
-@RestController @RequestMapping("/api/payments") public class PaymentController { private final PaymentRepository repo; public PaymentController(PaymentRepository repo){this.repo=repo;} @GetMapping("/{reference}") public PaymentRecord get(@PathVariable String reference){return repo.findByOrderReference(reference).orElseThrow(()->new ResponseStatusException(HttpStatus.NOT_FOUND,"Payment not found"));} }
+
+import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
+
+import java.util.Map;
+
+@RestController
+@RequestMapping("/api/payments")
+public class PaymentController {
+    private final PaymentRepository repo;
+
+    public PaymentController(PaymentRepository repo) {
+        this.repo = repo;
+    }
+
+    @GetMapping("/{reference}")
+    public PaymentRecord get(@PathVariable String reference) {
+        return repo.findByOrderReference(reference).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Payment not found"));
+    }
+}

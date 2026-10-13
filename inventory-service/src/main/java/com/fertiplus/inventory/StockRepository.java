@@ -1,3 +1,20 @@
 package com.fertiplus.inventory;
-import org.springframework.data.jpa.repository.JpaRepository; import org.springframework.data.jpa.repository.Modifying; import org.springframework.data.jpa.repository.Query; import org.springframework.data.repository.query.Param; import java.util.Optional;
-public interface StockRepository extends JpaRepository<Stock,Long> { Optional<Stock> findByProductId(Long productId); @Modifying @Query("update Stock s set s.available=s.available-:qty where s.productId=:id and s.available>=:qty") int reserve(@Param("id") Long id,@Param("qty") int qty); @Modifying @Query("update Stock s set s.available=s.available+:qty where s.productId=:id") int release(@Param("id") Long id,@Param("qty") int qty); }
+
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+
+import java.util.Optional;
+
+public interface StockRepository extends JpaRepository<Stock, Long> {
+    Optional<Stock> findByProductId(Long productId);
+
+    @Modifying
+    @Query("update Stock s set s.available=s.available-:qty where s.productId=:id and s.available>=:qty")
+    int reserve(@Param("id") Long id, @Param("qty") int qty);
+
+    @Modifying
+    @Query("update Stock s set s.available=s.available+:qty where s.productId=:id")
+    int release(@Param("id") Long id, @Param("qty") int qty);
+}
