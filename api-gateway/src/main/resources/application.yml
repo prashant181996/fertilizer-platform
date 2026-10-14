@@ -12,7 +12,7 @@ spring:
       routes:
         - id: product-service
           uri: ${PRODUCT_URL:http://localhost:8081}
-          predicates: [Path=/api/products/**]
+          predicates: [ Path=/api/products/** ]
           filters:
             - name: RequestRateLimiter
               args:
@@ -22,10 +22,10 @@ spring:
                 redis-rate-limiter.requestedTokens: 1
         - id: inventory-service
           uri: ${INVENTORY_URL:http://localhost:8082}
-          predicates: [Path=/api/inventory/**]
+          predicates: [ Path=/api/inventory/** ]
         - id: order-service
           uri: ${ORDER_URL:http://localhost:8083}
-          predicates: [Path=/api/orders/**]
+          predicates: [ Path=/api/orders/** ]
           filters:
             - name: RequestRateLimiter
               args:
@@ -35,10 +35,10 @@ spring:
                 redis-rate-limiter.requestedTokens: 1
         - id: payment-service
           uri: ${PAYMENT_URL:http://localhost:8084}
-          predicates: [Path=/api/payments/**]
+          predicates: [ Path=/api/payments/** ]
         - id: delivery-service
           uri: ${DELIVERY_URL:http://localhost:8085}
-          predicates: [Path=/api/deliveries/**]
+          predicates: [ Path=/api/deliveries/** ]
 management:
   endpoints:
     web:

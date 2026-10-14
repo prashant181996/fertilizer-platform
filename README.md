@@ -1,8 +1,14 @@
 # Fertilizer Order Platform — Java 21 / Spring Boot Microservices
 
-A runnable local-development reference project demonstrating asynchronous order acceptance, Kafka-based Saga orchestration, PostgreSQL service-owned data, an order transactional outbox, Redis product caching and API rate limiting, idempotent inventory reservations, persistent payment simulation, delivery creation, and a k6 load-test profile.
+A runnable local-development reference project demonstrating asynchronous order acceptance, Kafka-based Saga
+orchestration, PostgreSQL service-owned data, an order transactional outbox, Redis product caching and API rate
+limiting, idempotent inventory reservations, persistent payment simulation, delivery creation, and a k6 load-test
+profile.
 
-> **Capacity statement:** this is a scalable reference implementation, not a verified 10,000-TPS production system. No 10k-TPS benchmark has been run here. Actual capacity depends on hardware, Kafka/PostgreSQL topology, payloads, order mix, downstream services, and load-test results. The included Compose stack is a single-node development environment and is not highly available.
+> **Capacity statement:** this is a scalable reference implementation, not a verified 10,000-TPS production system. No
+> 10k-TPS benchmark has been run here. Actual capacity depends on hardware, Kafka/PostgreSQL topology, payloads, order
+> mix, downstream services, and load-test results. The included Compose stack is a single-node development environment and
+> is not highly available.
 
 ## Architecture
 
@@ -88,7 +94,8 @@ sequenceDiagram
 | Redis | 6379 | Gateway rate limiting and product cache |
 | Kafka | 9092 | Order, inventory, payment and confirmation events |
 
-Each service writes only to its own logical database. The Compose PostgreSQL instance and credentials are shared for local development only; use independent credentials and appropriately managed databases in production.
+Each service writes only to its own logical database. The Compose PostgreSQL instance and credentials are shared for
+local development only; use independent credentials and appropriately managed databases in production.
 
 ## Requirements
 
@@ -153,13 +160,16 @@ Invoke-RestMethod -Method Post -Uri 'http://localhost:8080/api/orders' `
   -ContentType 'application/json' -Body $body
 ```
 
-Expected response is **HTTP 202 Accepted**, containing `orderId` and `status: PENDING`. The order then progresses asynchronously. Query its state using the returned ID:
+Expected response is **HTTP 202 Accepted**, containing `orderId` and `status: PENDING`. The order then progresses
+asynchronously. Query its state using the returned ID:
 
 ```bash
 curl http://localhost:8080/api/orders/REPLACE_WITH_ORDER_ID
 ```
 
-Expected eventual state is `CONFIRMED` when inventory and the demo payment flow succeed, or `FAILED` when inventory is unavailable or a payment step fails. Reusing the same idempotency key returns the original order instead of creating another order. Use a new key for a new order.
+Expected eventual state is `CONFIRMED` when inventory and the demo payment flow succeed, or `FAILED` when inventory is
+unavailable or a payment step fails. Reusing the same idempotency key returns the original order instead of creating
+another order. Use a new key for a new order.
 
 Additional endpoints:
 
@@ -173,20 +183,39 @@ Additional endpoints:
 
 ## How consistency is handled
 
-- **Order acceptance:** the order row and `orders.created` outbox record are written in one PostgreSQL transaction. An asynchronous scheduled publisher sends pending outbox events to Kafka in batches. A crash after publish but before marking an event published can cause duplicate delivery, so consumers are designed to be idempotent.
-- **Inventory:** stock is decremented with a conditional atomic SQL update. A database reservation record with a unique order ID prevents double reservation. Releases are idempotent.
-- **Payment:** payment records are persisted and unique per order. This project simulates an authorization; it does not charge a real card or connect to a payment gateway. A real provider must receive a stable idempotency key and its ambiguous timeout state must be reconciled before compensation.
-- **Saga:** order state changes through `PENDING`, `PAYMENT_PENDING`, `CONFIRMED`, and `FAILED`. Payment failure triggers an inventory-release event. Downstream consumers can retry and duplicate events are expected in an at-least-once system.
-- **Dead-letter topics:** listener failures are retried with backoff, then routed to a `.DLT` topic. Monitor DLT volume and provide an operational replay/recovery process before production.
-- **Delivery and notification:** confirmed-order events create a durable shipment record and log a demo notification. No real courier, email, SMS, or push provider is configured.
+- **Order acceptance:** the order row and `orders.created` outbox record are written in one PostgreSQL transaction. An
+  asynchronous scheduled publisher claims pending rows in PostgreSQL using `FOR UPDATE SKIP LOCKED` plus a 60-second
+  claim lease, so horizontally scaled Order Service replicas do not all publish the same batch. A crash after publish
+  but before marking an event published can still cause duplicate delivery, so consumers must remain idempotent.
+- **Inventory:** stock is decremented with a conditional atomic SQL update. A database reservation record with a unique
+  order ID prevents double reservation. Releases are idempotent.
+- **Payment:** payment records are persisted and unique per order. This project simulates an authorization; it does not
+  charge a real card or connect to a payment gateway. A real provider must receive a stable idempotency key and its
+  ambiguous timeout state must be reconciled before compensation.
+- **Saga:** order state changes through `PENDING`, `PAYMENT_PENDING`, `CONFIRMED`, and `FAILED`. Payment failure
+  triggers an inventory-release event. Downstream consumers can retry and duplicate events are expected in an
+  at-least-once system.
+- **Dead-letter topics:** listener failures are retried with backoff, then routed to a `.DLT` topic. Monitor DLT volume
+  and provide an operational replay/recovery process before production.
+- **Delivery and notification:** confirmed-order events create a durable shipment record and log a demo notification. No
+  real courier, email, SMS, or push provider is configured.
 
 ## Rate limiting and scaling
 
-The Gateway uses Redis-backed token-bucket rate limiting. Defaults in the local configuration are 1,000 tokens/second and a burst of 2,000 **per resolved API key**. This is a per-client limit, not a guaranteed platform throughput figure. A client sending 10,000 requests/sec with one key will be throttled by design. Use different client keys only when they represent distinct legitimate clients; do not use key rotation to bypass production limits.
+The Gateway uses Redis-backed token-bucket rate limiting. Defaults in the local configuration are 1,000 tokens/second
+and a burst of 2,000 **per resolved API key**. This is a per-client limit, not a guaranteed platform throughput figure.
+A client sending 10,000 requests/sec with one key will be throttled by design. Use different client keys only when they
+represent distinct legitimate clients; do not use key rotation to bypass production limits.
 
-To scale application instances in a production orchestrator, configure multiple replicas, resource requests/limits, readiness/liveness probes, rolling updates, and autoscaling. Scale Kafka consumers using consumer lag and processing latency, not CPU alone. Database pool limits must be budgeted across all replicas; multiplying a 20-connection pool by many pods can exhaust PostgreSQL connections.
+To scale application instances in a production orchestrator, configure multiple replicas, resource requests/limits,
+readiness/liveness probes, rolling updates, and autoscaling. Scale Kafka consumers using consumer lag and processing
+latency, not CPU alone. Database pool limits must be budgeted across all replicas; multiplying a 20-connection pool by
+many pods can exhaust PostgreSQL connections.
 
-The local Compose setup intentionally has one Kafka broker and one PostgreSQL instance. For production, use multi-AZ managed Kafka/PostgreSQL/Redis or equivalent HA deployments, Kafka replication factor 3 (and suitable min ISR), TLS/SASL/ACLs, secrets management, backups, migrations, alerting, and disaster-recovery testing. Local topic replication factor is 1 because Compose runs a single broker.
+The local Compose setup intentionally has one Kafka broker and one PostgreSQL instance. For production, use multi-AZ
+managed Kafka/PostgreSQL/Redis or equivalent HA deployments, Kafka replication factor 3 (and suitable min ISR),
+TLS/SASL/ACLs, secrets management, backups, migrations, alerting, and disaster-recovery testing. Local topic replication
+factor is 1 because Compose runs a single broker.
 
 ## Load testing with k6
 
@@ -204,7 +233,11 @@ PowerShell example:
 $env:BASE_URL='http://localhost:8080'; $env:RATE='1000'; $env:DURATION='2m'; k6 run load-test/k6-orders.js
 ```
 
-The load test checks that order creation returns HTTP 202 and uses unique idempotency keys. Track request rate, p95/p99 latency, failures, PostgreSQL pool utilization, Kafka consumer lag, outbox age, DLT messages, and the eventual count of `CONFIRMED`/`FAILED` orders. The test generator must have enough CPU/network capacity. HTTP acceptance throughput is not the same as completed-order throughput. For 10k TPS, test the full system and verify stable backlog and business correctness over an extended run.
+The load test checks that order creation returns HTTP 202 and uses unique idempotency keys. Track request rate, p95/p99
+latency, failures, PostgreSQL pool utilization, Kafka consumer lag, outbox age, DLT messages, and the eventual count
+of `CONFIRMED`/`FAILED` orders. The test generator must have enough CPU/network capacity. HTTP acceptance throughput is
+not the same as completed-order throughput. For 10k TPS, test the full system and verify stable backlog and business
+correctness over an extended run.
 
 ## Useful commands
 
@@ -221,18 +254,26 @@ docker compose down -v
 
 ## Production gaps to close before real money or 10k TPS
 
-1. Replace demo payment authorization with a real provider integration, provider-side idempotency, reconciliation, and secure secret storage.
-2. Use managed multi-node Kafka/PostgreSQL/Redis with replication, authentication, TLS, backups, and tested recovery procedures.
-3. Add OAuth2/JWT authorization, tenant/customer authorization checks, request size limits, and security hardening; the local demo does not implement full authentication.
+1. Replace demo payment authorization with a real provider integration, provider-side idempotency, reconciliation, and
+   secure secret storage.
+2. Use managed multi-node Kafka/PostgreSQL/Redis with replication, authentication, TLS, backups, and tested recovery
+   procedures.
+3. Add OAuth2/JWT authorization, tenant/customer authorization checks, request size limits, and security hardening; the
+   local demo does not implement full authentication.
 4. Add a proper database migration tool (Flyway/Liquibase) rather than relying on Hibernate `ddl-auto=update`.
 5. Add end-to-end tracing, dashboards, SLO alerts, consumer lag/outbox-age/DLT alerts, and controlled DLT replay.
-6. Benchmark representative order mixes and payloads; tune partition count, consumers, pools, cache TTLs, JVM, CPU/memory and database indexes from evidence.
-7. Run concurrency, duplicate-event, crash-recovery, payment-timeout, stock-contention, failover, and long-duration soak tests.
+6. Benchmark representative order mixes and payloads; tune partition count, consumers, pools, cache TTLs, JVM,
+   CPU/memory and database indexes from evidence.
+7. Run concurrency, duplicate-event, crash-recovery, payment-timeout, stock-contention, failover, and long-duration soak
+   tests.
 
 ## Troubleshooting
 
-- If the Gateway returns `429`, the per-key Redis rate limit is active. Reduce load or configure an appropriate limit for the test environment.
-- If an order stays `PENDING`, inspect `order-service`, `inventory-service`, Kafka topics/consumer lag, and the outbox table.
+- If the Gateway returns `429`, the per-key Redis rate limit is active. Reduce load or configure an appropriate limit
+  for the test environment.
+- If an order stays `PENDING`, inspect `order-service`, `inventory-service`, Kafka topics/consumer lag, and the outbox
+  table.
 - If an order stays `PAYMENT_PENDING`, inspect `payment-service` logs and the `payment.requested` topic.
 - If a message lands in a `.DLT` topic, inspect the payload and consumer logs before replaying it.
-- If you change the Postgres init SQL after the database volume already exists, it will not run again automatically. For a disposable local environment only, `docker compose down -v` recreates the databases and removes all stored data.
+- If you change the Postgres init SQL after the database volume already exists, it will not run again automatically. For
+  a disposable local environment only, `docker compose down -v` recreates the databases and removes all stored data.

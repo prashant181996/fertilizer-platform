@@ -1,0 +1,179 @@
+# Requires Kubernetes metrics-server and KEDA installed in the cluster.
+# Replace kafka-bootstrap with the broker endpoint reachable from this namespace.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: api-gateway
+  namespace: fertilizer
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: api-gateway
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: 65 }
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: product-service
+  namespace: fertilizer
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: product-service
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: 65 }
+---
+# Order Service handles HTTP acceptance and two Kafka consumer groups. The maximum of
+# 8 replicas * concurrency 6 gives up to 48 active consumers per listener group.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: order-service
+  namespace: fertilizer
+spec:
+  scaleTargetRef: { name: order-service }
+  minReplicaCount: 4
+  maxReplicaCount: 8
+  pollingInterval: 15
+  cooldownPeriod: 120
+  triggers:
+    - type: cpu
+      metricType: Utilization
+      metadata: { value: "65" }
+    - type: kafka
+      metadata:
+        bootstrapServers: kafka-bootstrap:9092
+        consumerGroup: order-inventory-saga
+        topic: inventory.reserved
+        lagThreshold: "500"
+        activationLagThreshold: "100"
+        offsetResetPolicy: earliest
+    - type: kafka
+      metadata:
+        bootstrapServers: kafka-bootstrap:9092
+        consumerGroup: order-inventory-saga
+        topic: inventory.rejected
+        lagThreshold: "500"
+        activationLagThreshold: "100"
+        offsetResetPolicy: earliest
+    - type: kafka
+      metadata:
+        bootstrapServers: kafka-bootstrap:9092
+        consumerGroup: order-payment-saga
+        topic: payment.authorized
+        lagThreshold: "500"
+        activationLagThreshold: "100"
+        offsetResetPolicy: earliest
+    - type: kafka
+      metadata:
+        bootstrapServers: kafka-bootstrap:9092
+        consumerGroup: order-payment-saga
+        topic: payment.failed
+        lagThreshold: "500"
+        activationLagThreshold: "100"
+        offsetResetPolicy: earliest
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: inventory-service
+  namespace: fertilizer
+spec:
+  scaleTargetRef: { name: inventory-service }
+  minReplicaCount: 3
+  maxReplicaCount: 4
+  pollingInterval: 15
+  cooldownPeriod: 120
+  triggers:
+    - type: kafka
+      metadata:
+        bootstrapServers: kafka-bootstrap:9092
+        consumerGroup: inventory-service
+        topic: orders.created
+        lagThreshold: "500"
+        activationLagThreshold: "100"
+        offsetResetPolicy: earliest
+    - type: kafka
+      metadata:
+        bootstrapServers: kafka-bootstrap:9092
+        consumerGroup: inventory-release
+        topic: inventory.release
+        lagThreshold: "200"
+        activationLagThreshold: "50"
+        offsetResetPolicy: earliest
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: payment-service
+  namespace: fertilizer
+spec:
+  scaleTargetRef: { name: payment-service }
+  minReplicaCount: 3
+  maxReplicaCount: 4
+  pollingInterval: 15
+  cooldownPeriod: 120
+  triggers:
+    - type: kafka
+      metadata:
+        bootstrapServers: kafka-bootstrap:9092
+        consumerGroup: payment-service
+        topic: payment.requested
+        lagThreshold: "500"
+        activationLagThreshold: "100"
+        offsetResetPolicy: earliest
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: delivery-service
+  namespace: fertilizer
+spec:
+  scaleTargetRef: { name: delivery-service }
+  minReplicaCount: 2
+  maxReplicaCount: 8
+  pollingInterval: 15
+  cooldownPeriod: 120
+  triggers:
+    - type: kafka
+      metadata:
+        bootstrapServers: kafka-bootstrap:9092
+        consumerGroup: delivery-service
+        topic: orders.confirmed
+        lagThreshold: "1000"
+        activationLagThreshold: "100"
+        offsetResetPolicy: earliest
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: notification-service
+  namespace: fertilizer
+spec:
+  scaleTargetRef: { name: notification-service }
+  minReplicaCount: 2
+  maxReplicaCount: 8
+  pollingInterval: 15
+  cooldownPeriod: 120
+  triggers:
+    - type: kafka
+      metadata:
+        bootstrapServers: kafka-bootstrap:9092
+        consumerGroup: notification-service
+        topic: orders.confirmed
+        lagThreshold: "1000"
+        activationLagThreshold: "100"
+        offsetResetPolicy: earliest

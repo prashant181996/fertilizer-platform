@@ -1,14 +1,24 @@
 package com.fertiplus.order;
 
 import org.apache.kafka.clients.admin.NewTopic;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.kafka.config.TopicBuilder;
 
 @Configuration
 public class OrderEventConfig {
+    @Value("${app.kafka.topic-partitions:48}")
+    private int partitions;
+
+    @Value("${app.kafka.topic-replication-factor:1}")
+    private int replicationFactor;
+
     private NewTopic topic(String name) {
-        return TopicBuilder.name(name).partitions(24).replicas(1).build();
+        return TopicBuilder.name(name)
+                .partitions(partitions)
+                .replicas(replicationFactor)
+                .build();
     }
 
     @Bean

@@ -5,24 +5,24 @@ services:
       POSTGRES_DB: fertilizer
       POSTGRES_USER: ${DB_USER:-fertilizer}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-fertilizer_dev_password}
-    ports: ["5432:5432"]
-    volumes: ["pgdata:/var/lib/postgresql/data", "./infra/postgres/init:/docker-entrypoint-initdb.d:ro"]
+    ports: [ "5432:5432" ]
+    volumes: [ "pgdata:/var/lib/postgresql/data", "./infra/postgres/init:/docker-entrypoint-initdb.d:ro" ]
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d fertilizer"]
+      test: [ "CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d fertilizer" ]
       interval: 5s
       timeout: 3s
       retries: 20
   redis:
     image: redis:7-alpine
-    ports: ["6379:6379"]
+    ports: [ "6379:6379" ]
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: [ "CMD", "redis-cli", "ping" ]
       interval: 5s
       timeout: 3s
       retries: 20
   kafka:
     image: bitnami/kafka:3.8
-    ports: ["9092:9092"]
+    ports: [ "9092:9092" ]
     environment:
       ALLOW_PLAINTEXT_LISTENER: "yes"
       KAFKA_CFG_NODE_ID: 0
@@ -37,14 +37,14 @@ services:
       KAFKA_CFG_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_CFG_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_CFG_TRANSACTION_STATE_LOG_MIN_ISR: 1
-      KAFKA_CFG_NUM_PARTITIONS: 24
+      KAFKA_CFG_NUM_PARTITIONS: ${KAFKA_TOPIC_PARTITIONS:-48}
     healthcheck:
-      test: ["CMD-SHELL", "kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      test: [ "CMD-SHELL", "kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1" ]
       interval: 10s
       timeout: 10s
       retries: 20
   product-service:
-    build: {context: ., dockerfile: product-service/Dockerfile}
+    build: { context: ., dockerfile: product-service/Dockerfile }
     environment:
       DB_URL: jdbc:postgresql://postgres:5432/fertilizer_products
       DB_USER: ${DB_USER:-fertilizer}
@@ -53,54 +53,58 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: 6379
     depends_on:
-      postgres: {condition: service_healthy}
-      redis: {condition: service_healthy}
-    ports: ["8081:8081"]
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    ports: [ "8081:8081" ]
   inventory-service:
-    build: {context: ., dockerfile: inventory-service/Dockerfile}
+    build: { context: ., dockerfile: inventory-service/Dockerfile }
     environment:
       DB_URL: jdbc:postgresql://postgres:5432/fertilizer_inventory
       DB_USER: ${DB_USER:-fertilizer}
       DB_PASSWORD: ${DB_PASSWORD:-fertilizer_dev_password}
       DB_POOL_MAX: 20
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_LISTENER_CONCURRENCY: ${INVENTORY_SERVICE_KAFKA_CONCURRENCY:-12}
     depends_on:
-      postgres: {condition: service_healthy}
-      kafka: {condition: service_healthy}
-    ports: ["8082:8082"]
+      postgres: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+    ports: [ "8082:8082" ]
   payment-service:
-    build: {context: ., dockerfile: payment-service/Dockerfile}
+    build: { context: ., dockerfile: payment-service/Dockerfile }
     environment:
       DB_URL: jdbc:postgresql://postgres:5432/fertilizer_payments
       DB_USER: ${DB_USER:-fertilizer}
       DB_PASSWORD: ${DB_PASSWORD:-fertilizer_dev_password}
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_LISTENER_CONCURRENCY: ${PAYMENT_SERVICE_KAFKA_CONCURRENCY:-12}
       DB_POOL_MAX: 20
     depends_on:
-      postgres: {condition: service_healthy}
-      kafka: {condition: service_healthy}
-    ports: ["8084:8084"]
+      postgres: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+    ports: [ "8084:8084" ]
   delivery-service:
-    build: {context: ., dockerfile: delivery-service/Dockerfile}
+    build: { context: ., dockerfile: delivery-service/Dockerfile }
     environment:
       DB_URL: jdbc:postgresql://postgres:5432/fertilizer_delivery
       DB_USER: ${DB_USER:-fertilizer}
       DB_PASSWORD: ${DB_PASSWORD:-fertilizer_dev_password}
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_LISTENER_CONCURRENCY: ${DELIVERY_SERVICE_KAFKA_CONCURRENCY:-6}
       DB_POOL_MAX: 10
     depends_on:
-      postgres: {condition: service_healthy}
-      kafka: {condition: service_healthy}
-    ports: ["8085:8085"]
+      postgres: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+    ports: [ "8085:8085" ]
   notification-service:
-    build: {context: ., dockerfile: notification-service/Dockerfile}
+    build: { context: ., dockerfile: notification-service/Dockerfile }
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_LISTENER_CONCURRENCY: ${NOTIFICATION_SERVICE_KAFKA_CONCURRENCY:-6}
     depends_on:
-      kafka: {condition: service_healthy}
-    ports: ["8086:8086"]
+      kafka: { condition: service_healthy }
+    ports: [ "8086:8086" ]
   order-service:
-    build: {context: ., dockerfile: order-service/Dockerfile}
+    build: { context: ., dockerfile: order-service/Dockerfile }
     environment:
       DB_URL: jdbc:postgresql://postgres:5432/fertilizer_orders
       DB_USER: ${DB_USER:-fertilizer}
@@ -110,18 +114,21 @@ services:
       INVENTORY_URL: http://inventory-service:8082
       PAYMENT_URL: http://payment-service:8084
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_TOPIC_PARTITIONS: ${KAFKA_TOPIC_PARTITIONS:-48}
+      KAFKA_TOPIC_REPLICATION_FACTOR: ${KAFKA_TOPIC_REPLICATION_FACTOR:-1}
+      KAFKA_LISTENER_CONCURRENCY: ${ORDER_KAFKA_CONCURRENCY:-12}
       REDIS_HOST: redis
       REDIS_PORT: 6379
     depends_on:
-      postgres: {condition: service_healthy}
-      redis: {condition: service_healthy}
-      product-service: {condition: service_started}
-      inventory-service: {condition: service_started}
-      payment-service: {condition: service_started}
-      kafka: {condition: service_healthy}
-    ports: ["8083:8083"]
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      product-service: { condition: service_started }
+      inventory-service: { condition: service_started }
+      payment-service: { condition: service_started }
+      kafka: { condition: service_healthy }
+    ports: [ "8083:8083" ]
   api-gateway:
-    build: {context: ., dockerfile: api-gateway/Dockerfile}
+    build: { context: ., dockerfile: api-gateway/Dockerfile }
     environment:
       REDIS_HOST: redis
       PRODUCT_URL: http://product-service:8081
@@ -130,12 +137,12 @@ services:
       PAYMENT_URL: http://payment-service:8084
       DELIVERY_URL: http://delivery-service:8085
     depends_on:
-      redis: {condition: service_healthy}
-      product-service: {condition: service_started}
-      inventory-service: {condition: service_started}
-      order-service: {condition: service_started}
-      payment-service: {condition: service_started}
-      delivery-service: {condition: service_started}
-    ports: ["8080:8080"]
+      redis: { condition: service_healthy }
+      product-service: { condition: service_started }
+      inventory-service: { condition: service_started }
+      order-service: { condition: service_started }
+      payment-service: { condition: service_started }
+      delivery-service: { condition: service_started }
+    ports: [ "8080:8080" ]
 volumes:
   pgdata:

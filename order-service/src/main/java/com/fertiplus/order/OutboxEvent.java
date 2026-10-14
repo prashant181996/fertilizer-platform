@@ -6,7 +6,7 @@ import java.time.Instant;
 import java.util.UUID;
 
 @Entity
-@Table(name = "outbox_events", indexes = @Index(name = "idx_outbox_pending", columnList = "published_at,created_at"))
+@Table(name = "outbox_events", indexes = {@Index(name = "idx_outbox_pending", columnList = "published_at,created_at"), @Index(name = "idx_outbox_claimable", columnList = "published_at,claimed_at,created_at")})
 public class OutboxEvent {
     @Id
     public String id;
@@ -18,6 +18,8 @@ public class OutboxEvent {
     public String payload;
     @Column(name = "published_at")
     public Instant publishedAt;
+    @Column(name = "claimed_at")
+    public Instant claimedAt;
     @Column(name = "created_at", nullable = false)
     public Instant createdAt = Instant.now();
 

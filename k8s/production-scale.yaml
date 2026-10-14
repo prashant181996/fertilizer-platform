@@ -1,0 +1,322 @@
+# Production-oriented Kubernetes template. Replace image registry, secret values,
+# and managed Kafka/PostgreSQL/Redis endpoints before applying.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: fertilizer
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fertilizer-config
+  namespace: fertilizer
+data:
+  KAFKA_BOOTSTRAP_SERVERS: "kafka-bootstrap:9092"
+  REDIS_HOST: "redis-primary"
+  REDIS_PORT: "6379"
+  PRODUCT_URL: "http://product-service:8081"
+  INVENTORY_URL: "http://inventory-service:8082"
+  ORDER_URL: "http://order-service:8083"
+  PAYMENT_URL: "http://payment-service:8084"
+  DELIVERY_URL: "http://delivery-service:8085"
+  KAFKA_TOPIC_PARTITIONS: "48"
+  KAFKA_TOPIC_REPLICATION_FACTOR: "3"
+  RATE_LIMIT_REPLENISH: "1000"
+  RATE_LIMIT_BURST: "2000"
+---
+# Replace these development placeholders with External Secrets / cloud secret manager.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: fertilizer-db-secret
+  namespace: fertilizer
+type: Opaque
+stringData:
+  DB_USER: "REPLACE_WITH_DB_USER"
+  DB_PASSWORD: "REPLACE_WITH_SECRET"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-gateway
+  namespace: fertilizer
+spec:
+  replicas: 3
+  selector:
+    matchLabels: { app: api-gateway }
+  template:
+    metadata:
+      labels: { app: api-gateway }
+    spec:
+      containers:
+        - name: api-gateway
+          image: YOUR_REGISTRY/fertilizer-api-gateway:1.0.0
+          ports: [ { containerPort: 8080 } ]
+          envFrom: [ { configMapRef: { name: fertilizer-config } } ]
+          resources:
+            requests: { cpu: "500m", memory: "512Mi" }
+            limits: { cpu: "2", memory: "1Gi" }
+          readinessProbe: { httpGet: { path: /actuator/health, port: 8080 }, initialDelaySeconds: 20, periodSeconds: 10 }
+          livenessProbe: { httpGet: { path: /actuator/health, port: 8080 }, initialDelaySeconds: 40, periodSeconds: 20 }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-gateway
+  namespace: fertilizer
+spec:
+  type: LoadBalancer
+  selector: { app: api-gateway }
+  ports: [ { port: 8080, targetPort: 8080 } ]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-service
+  namespace: fertilizer
+spec:
+  replicas: 4
+  selector:
+    matchLabels: { app: order-service }
+  template:
+    metadata:
+      labels: { app: order-service }
+    spec:
+      containers:
+        - name: order-service
+          image: YOUR_REGISTRY/fertilizer-order-service:1.0.0
+          ports: [ { containerPort: 8083 } ]
+          envFrom:
+            - configMapRef: { name: fertilizer-config }
+            - secretRef: { name: fertilizer-db-secret }
+          env:
+            - name: DB_URL
+              value: "jdbc:postgresql://postgres-orders:5432/fertilizer_orders"
+            - name: DB_POOL_MAX
+              value: "10"
+            - name: DB_POOL_MIN
+              value: "2"
+            - name: KAFKA_LISTENER_CONCURRENCY
+              value: "6"
+            - name: OUTBOX_BATCH_SIZE
+              value: "100"
+          resources:
+            requests: { cpu: "1", memory: "1Gi" }
+            limits: { cpu: "2", memory: "2Gi" }
+          readinessProbe: { httpGet: { path: /actuator/health, port: 8083 }, initialDelaySeconds: 30, periodSeconds: 10 }
+          livenessProbe: { httpGet: { path: /actuator/health, port: 8083 }, initialDelaySeconds: 60, periodSeconds: 20 }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: order-service
+  namespace: fertilizer
+spec:
+  selector: { app: order-service }
+  ports: [ { port: 8083, targetPort: 8083 } ]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: product-service
+  namespace: fertilizer
+spec:
+  replicas: 3
+  selector:
+    matchLabels: { app: product-service }
+  template:
+    metadata:
+      labels: { app: product-service }
+    spec:
+      containers:
+        - name: product-service
+          image: YOUR_REGISTRY/fertilizer-product-service:1.0.0
+          ports: [ { containerPort: 8081 } ]
+          envFrom:
+            - configMapRef: { name: fertilizer-config }
+            - secretRef: { name: fertilizer-db-secret }
+          env:
+            - name: DB_URL
+              value: "jdbc:postgresql://postgres-products:5432/fertilizer_products"
+            - name: DB_POOL_MAX
+              value: "10"
+          resources:
+            requests: { cpu: "500m", memory: "512Mi" }
+            limits: { cpu: "2", memory: "1Gi" }
+          readinessProbe: { httpGet: { path: /actuator/health, port: 8081 }, initialDelaySeconds: 25, periodSeconds: 10 }
+          livenessProbe: { httpGet: { path: /actuator/health, port: 8081 }, initialDelaySeconds: 50, periodSeconds: 20 }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: product-service
+  namespace: fertilizer
+spec:
+  selector: { app: product-service }
+  ports: [ { port: 8081, targetPort: 8081 } ]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inventory-service
+  namespace: fertilizer
+spec:
+  replicas: 3
+  selector:
+    matchLabels: { app: inventory-service }
+  template:
+    metadata:
+      labels: { app: inventory-service }
+    spec:
+      containers:
+        - name: inventory-service
+          image: YOUR_REGISTRY/fertilizer-inventory-service:1.0.0
+          ports: [ { containerPort: 8082 } ]
+          envFrom:
+            - configMapRef: { name: fertilizer-config }
+            - secretRef: { name: fertilizer-db-secret }
+          env:
+            - name: DB_URL
+              value: "jdbc:postgresql://postgres-inventory:5432/fertilizer_inventory"
+            - name: DB_POOL_MAX
+              value: "10"
+            - name: DB_POOL_MIN
+              value: "2"
+            - name: KAFKA_LISTENER_CONCURRENCY
+              value: "12"
+          resources:
+            requests: { cpu: "1", memory: "1Gi" }
+            limits: { cpu: "2", memory: "2Gi" }
+          readinessProbe: { httpGet: { path: /actuator/health, port: 8082 }, initialDelaySeconds: 30, periodSeconds: 10 }
+          livenessProbe: { httpGet: { path: /actuator/health, port: 8082 }, initialDelaySeconds: 60, periodSeconds: 20 }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: inventory-service
+  namespace: fertilizer
+spec:
+  selector: { app: inventory-service }
+  ports: [ { port: 8082, targetPort: 8082 } ]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment-service
+  namespace: fertilizer
+spec:
+  replicas: 3
+  selector:
+    matchLabels: { app: payment-service }
+  template:
+    metadata:
+      labels: { app: payment-service }
+    spec:
+      containers:
+        - name: payment-service
+          image: YOUR_REGISTRY/fertilizer-payment-service:1.0.0
+          ports: [ { containerPort: 8084 } ]
+          envFrom:
+            - configMapRef: { name: fertilizer-config }
+            - secretRef: { name: fertilizer-db-secret }
+          env:
+            - name: DB_URL
+              value: "jdbc:postgresql://postgres-payments:5432/fertilizer_payments"
+            - name: DB_POOL_MAX
+              value: "10"
+            - name: DB_POOL_MIN
+              value: "2"
+            - name: KAFKA_LISTENER_CONCURRENCY
+              value: "12"
+          resources:
+            requests: { cpu: "1", memory: "1Gi" }
+            limits: { cpu: "2", memory: "2Gi" }
+          readinessProbe: { httpGet: { path: /actuator/health, port: 8084 }, initialDelaySeconds: 30, periodSeconds: 10 }
+          livenessProbe: { httpGet: { path: /actuator/health, port: 8084 }, initialDelaySeconds: 60, periodSeconds: 20 }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: payment-service
+  namespace: fertilizer
+spec:
+  selector: { app: payment-service }
+  ports: [ { port: 8084, targetPort: 8084 } ]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: delivery-service
+  namespace: fertilizer
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: delivery-service }
+  template:
+    metadata:
+      labels: { app: delivery-service }
+    spec:
+      containers:
+        - name: delivery-service
+          image: YOUR_REGISTRY/fertilizer-delivery-service:1.0.0
+          ports: [ { containerPort: 8085 } ]
+          envFrom:
+            - configMapRef: { name: fertilizer-config }
+            - secretRef: { name: fertilizer-db-secret }
+          env:
+            - name: DB_URL
+              value: "jdbc:postgresql://postgres-delivery:5432/fertilizer_delivery"
+            - name: DB_POOL_MAX
+              value: "8"
+            - name: KAFKA_LISTENER_CONCURRENCY
+              value: "6"
+          resources:
+            requests: { cpu: "500m", memory: "512Mi" }
+            limits: { cpu: "2", memory: "1Gi" }
+          readinessProbe: { httpGet: { path: /actuator/health, port: 8085 }, initialDelaySeconds: 30, periodSeconds: 10 }
+          livenessProbe: { httpGet: { path: /actuator/health, port: 8085 }, initialDelaySeconds: 60, periodSeconds: 20 }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: delivery-service
+  namespace: fertilizer
+spec:
+  selector: { app: delivery-service }
+  ports: [ { port: 8085, targetPort: 8085 } ]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notification-service
+  namespace: fertilizer
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: notification-service }
+  template:
+    metadata:
+      labels: { app: notification-service }
+    spec:
+      containers:
+        - name: notification-service
+          image: YOUR_REGISTRY/fertilizer-notification-service:1.0.0
+          ports: [ { containerPort: 8086 } ]
+          envFrom: [ { configMapRef: { name: fertilizer-config } } ]
+          env:
+            - name: KAFKA_LISTENER_CONCURRENCY
+              value: "6"
+          resources:
+            requests: { cpu: "250m", memory: "256Mi" }
+            limits: { cpu: "1", memory: "768Mi" }
+          readinessProbe: { httpGet: { path: /actuator/health, port: 8086 }, initialDelaySeconds: 20, periodSeconds: 10 }
+          livenessProbe: { httpGet: { path: /actuator/health, port: 8086 }, initialDelaySeconds: 40, periodSeconds: 20 }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: notification-service
+  namespace: fertilizer
+spec:
+  selector: { app: notification-service }
+  ports: [ { port: 8086, targetPort: 8086 } ]
