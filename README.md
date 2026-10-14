@@ -5,10 +5,6 @@ orchestration, PostgreSQL service-owned data, an order transactional outbox, Red
 limiting, idempotent inventory reservations, persistent payment simulation, delivery creation, and a k6 load-test
 profile.
 
-> **Capacity statement:** this is a scalable reference implementation, not a verified 10,000-TPS production system. No
-> 10k-TPS benchmark has been run here. Actual capacity depends on hardware, Kafka/PostgreSQL topology, payloads, order
-> mix, downstream services, and load-test results. The included Compose stack is a single-node development environment and
-> is not highly available.
 
 ## Architecture
 
